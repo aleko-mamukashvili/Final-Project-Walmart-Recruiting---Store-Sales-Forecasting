@@ -25,7 +25,7 @@ $$WMAE = \frac{1}{\sum w_i} \sum_{i=1}^{n} w_i |y_i - \hat{y}_i|$$
 
 # LightGBM 
 
-MLflow (DagsHub): `LightGBM_Training` ექსპერიმენტი — [LightGBM MlFlow](https://dagshub.com/aleko-mamukashvili/Store-Sales-Forecasting.mlflow/#/experiments/2)
+MLflow (DagsHub): `LightGBM_Training` ექსპერიმენტი - [LightGBM MlFlow](https://dagshub.com/aleko-mamukashvili/Store-Sales-Forecasting.mlflow/#/experiments/2)
 
 გადავწყვიტე LightGBM-ისთვის feature engineering-ის ყოველი ეტაპი მონაცემებზე დაკვირვებით და კონკრეტული სტატისტიკის საფუძველზე გამეკეთებინა ამ README-ში აღვწერ თუ რას ვხედავდი EDA-ში, რა გადაწყვეტილებას ვიღებდი ამის საფუძველზე, და რა შედეგი მოჰყვა ყოველ ცვლილებას.
 
