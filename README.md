@@ -230,7 +230,7 @@ Private Score:  3161.70
 
 # Prophet
 
-MLflow (DagsHub): `LightGBM_Training` ექსპერიმენტი - [Prophet MlFlow](https://dagshub.com/aleko-mamukashvili/Store-Sales-Forecasting.mlflow/#/experiments/3)
+MLflow (DagsHub): `Prophet` ექსპერიმენტი - [Prophet MlFlow](https://dagshub.com/aleko-mamukashvili/Store-Sales-Forecasting.mlflow/#/experiments/3)
 
 
 
@@ -350,5 +350,122 @@ Row-level WMAE_val:   4,872.0
 ```
 
 Train-ის შედეგი (2,833) თითქმის იდენტურია LightGBM-ის მსგავს რიცხვებთან  ლოგიკურია, რადგან train-პერიოდზე პროპორციული განაწილება საკმაოდ ზუსტია. Val-ზე სხვაობა (4,872 vs 2,746) მოსალოდნელი. ეს არის ერთი აგრეგირებული მოდელის და 2900+ ინდივიდუალურად გაწვრთნილი (Store,Dept) მოდელის ბუნებრივი სხვაობა
+
+
+
+
+
+
+
+# N-BEATS 
+
+MLflow (DagsHub): `N_beats` ექსპერიმენტი - [Prophet MlFlow](https://dagshub.com/aleko-mamukashvili/Store-Sales-Forecasting.mlflow/#/experiments/5)
+
+---
+
+## EDA — გადაწყვეტილებები N-BEATS-ის არქიტექტურისთვის
+
+### სერიის საერთო სიგრძე
+
+სულ ხელმისაწვდომია 143 კვირა (2010-02-05 -- 2012-10-26). Backcast (52 კვირა) + Forecast (15 კვირა) ფანჯრისთვის მინიმუმ 67 კვირაა საჭირო.
+
+
+### სეზონურობის დადასტურება  Autocorrelation 
+
+![ACF](images/nbeats/acf_seasonality.png)
+
+ავტოკორელაციის გრაფიკზე მკვეთრი spike ჩანს ~52 lag-თან ეს ადასტურებს წლიურ სეზონურობას 
+
+**გადაწყვეტილება:** N-BEATS-ის **Seasonality Basis**-ს `period=52`-ზე ვაწყობთ
+
+### მასშტაბის შემოწმება
+
+Aggregate-დონეზე მნიშვნელობები ათეულ მილიონებშია. ნეირონული ქსელისთვის ეს პრობლემურია (gradient-ების არასტაბილურობა, სწავლის სირთულე).
+
+**გადაწყვეტილება:**  `MinMaxScaler` 
+
+---
+
+## Feature Engineering & Feature Selection 
+
+
+### Scaling 
+
+- **Aggregate მიდგომაში:** `MinMaxScaler`
+- **Global Multi-Series მიდგომაში (საბოლოო):** **per-series mean-scaling**  თითოეული (Store, Dept) სერია იყოფა **საკუთარ** train-პერიოდის საშუალოზე. ეს გადამწყვეტი feature engineering გადაწყვეტილებაა: სერიებს შორის მასშტაბის სხვაობა დიდია, ამიტომ **გლობალური** scaler-ი პატარა სერიებს პრაქტიკულად წაშლიდა loss-ში. 
+
+
+
+
+**Run 1 (Baseline, Generic only):**
+
+![Run 1](images/nbeats/run1_baseline_forecast.png)
+
+| + Trend | Trend + Generic | პოლინომიალური (degree=3) ტრენდის მოდელირება |
+| + Seasonality | Trend + Seasonality + Generic | Fourier-basis, period=52  |
+
+**Run 3 (Trend+Seasonality+Generic):**
+
+![Run 3 Forecast](images/nbeats/run3_seasonality_forecast.png)
+![Run 3 Training Curves](images/nbeats/run3_training_curves.png)
+
+
+**დამატებითი feature-engineering ექსპერიმენტები (Run 4-8):** Backcast-სიგრძის ვარიაცია (52 vs 26 კვირა), ქსელის სიგანე (hidden_dim 64 vs 128), learning rate, blocks-per-stack, და weighted-loss
+
+---
+
+### რატომ დაგვჭირდა აგრეგაცია თავიდან
+
+N-BEATS-ს, როგორც ითქვა, არ შეუძლია ერთდროულად 3254 სერიის სწავლა უბრალო `fit()`-ით, ორი გზა გვქონდა:
+
+1. **2865 ცალკეული N-BEATS მოდელის გაწვრთნა** (თითო Store/Dept-ზე ერთი)  ეს ტექნიკურად სწორი იქნებოდა, მაგრამ დროში ვიყავით შეზღუდულები
+2. **აგრეგაცია**  ყველა Store/Dept-ის ჯამური კვირეული გაყიდვა ერთ სერიად, ერთხელ გაწვრთნა, შემდეგ **disaggregation** (პროპორციული განაწილება უკან, თითოეული Store/Dept-ის ისტორიული წილის მიხედვით).
+
+
+
+აგრეგაცია+disaggregation მუშაობდა, მაგრამ ჰქონდა ფუნდამენტური სისუსტე
+
+**გადავწყვიტეთ, რომ აღარ გაგვეკეთებინა აგრეგაცია** და ამის ნაცვლად, **Global Multi-Series** მიდგომა ავაწყეთ:
+
+- Sliding window-ები აიგება **ცალ-ცალკე, თითოეული 2865 (Store, Dept) სერიიდან** 
+- ყველა ეს window ერთ, საერთო training set-ში ერთიანდება (stride=1-ით  69,842 window)
+- ერთ გლობალური ქსელს ვწვრთნით ამ ყველა window-ზე ერთდროულად 
+- Per-series scaling უზრუნველყოფს, რომ სხვადასხვა მასშტაბის სერიები სამართლიანად მონაწილეობენ ტრენინგში
+- Evaluation-ისას თითოეული სერიისთვის  prediction გამოდის. disaggregation საერთოდ აღარ გვჭირდება, რადგან არასდროს მომხდარა აგრეგაცია
+
+**შედეგი დაუყოვნებლივ გაუმ�ჯობესდა:**
+
+```
+Aggregate + Disaggregation:              WMAE_val = 4,446.2
+Global Multi-Series (მარტივი):           WMAE_val = 3,866.4
+Global Multi-Series + Search + Ensemble: WMAE_val = 3,727.7  
+```
+
+ეს რიცხვები რაოდენობრივად ადასტურებს ჰიპოთეზას, აგრეგაცია არა მხოლოდ თეორიულად არასწორია N-BEATS-ის ფილოსოფიასთან, არამედ პრაქტიკულადაც უარესი შედეგი გამოვიდა.
+
+
+---
+
+## Random Search + Ensemble  ავთენტური N-BEATS ტექნიკა
+
+Global Multi-Series საბოლოო ვერსია მოიცავს ორ დამატებით ეტაპს
+
+![Random Search Comparison](images/nbeats/random_search_comparison.png)
+
+**Random Search (6 trial):** hidden_dim, blocks-per-stack, FC-layers, learning rate, trend-degree, seasonality-harmonics ნამდვილ internal validation-ზე შედარებული 
+
+![Ensemble Training Curves](images/nbeats/ensemble_training_curves.png)
+
+**Ensemble (3 დამოუკიდებელი მოდელი):** საუკეთესო კონფიგურაციით, სხვადასხვა random seed-ით გაწვრთნილი, prediction-ების საშუალო. ეს ამცირებს ცალკეული trial-ის ცუდი ინიციალიზაციის რისკს.
+
+---
+
+## შედეგების შედარება
+
+| მოდელი/მიდგომა | Row-level WMAE_val |
+|---|---|
+| Aggregate + Disaggregation | 4,446.2 |
+| Global Multi-Series (მარტივი) | 3,866.4 |
+| **Global Multi-Series + Search + Ensemble** | **3,727.7** |
 
 
